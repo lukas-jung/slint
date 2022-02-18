@@ -44,7 +44,7 @@ ActionButton := Rectangle {
 export HomePage := Page {
     property <length> header-row-height: 40px;
 
-    property <length> button-spacing: 35px;
+    property <length> button-spacing: 28px;
     property <length> button-width: 127px;
     property <length> button-height: button-width + 37px;
 
@@ -71,7 +71,7 @@ export HomePage := Page {
     }
 
     queue-view := PrinterQueueView {
-        x: (button-width +button-spacing)*2 + 28px;
+        x: button-width*2 +button-spacing;
         width: parent.width - x;
         show-job-details(idx) => {
             current-subpage = 1; // Not nice to hard-code the index here...
