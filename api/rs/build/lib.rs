@@ -276,16 +276,41 @@ pub fn compile_with_config(
 
     println!("cargo:rustc-env=SLINT_INCLUDE_GENERATED={}", output_file_path.display());
 
-    configure_linker();
-
     Ok(())
 }
 
-mod mcu {
-    pub mod pico_st7789;
-}
+/// This function is for use the application's build script, in order to print any device specific
+/// build flags reported by the backend
+pub fn print_rustc_flags() -> std::io::Result<()> {
+    if let Some(board_config_path) =
+        std::env::var_os("DEP_I_SLINT_BACKEND_MCU_BOARD_CONFIG_PATH").map(std::path::PathBuf::from)
+    {
+        let config = std::fs::read_to_string(board_config_path.as_path())?;
+        let toml = config.parse::<toml_edit::Document>().expect("invalid board config toml");
 
-fn configure_linker() {
-    #[cfg(feature = "mcu-pico-st7789")]
-    mcu::pico_st7789::configure_linker();
+        for link_arg in
+            toml.get("link_args").map(toml_edit::Item::as_array).flatten().into_iter().flatten()
+        {
+            if let Some(option) = link_arg.as_str() {
+                println!("cargo:rustc-link-arg={}", option);
+            }
+        }
+
+        for link_search_path in toml
+            .get("link_search_path")
+            .map(toml_edit::Item::as_array)
+            .flatten()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(mut path) = link_search_path.as_str().map(std::path::PathBuf::from) {
+                if path.is_relative() {
+                    path = board_config_path.parent().unwrap().join(path);
+                }
+                println!("cargo:rustc-link-search={}", path.to_string_lossy());
+            }
+        }
+    }
+
+    Ok(())
 }
