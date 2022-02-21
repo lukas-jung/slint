@@ -70,7 +70,6 @@ pub fn render_window_frame(
 
     let mut line_processing_profiler = profiler::Timer::new_stopped();
     let mut span_drawing_profiler = profiler::Timer::new_stopped();
-    let mut span_drawing_sub_profilers = [0; 5].map(|_| profiler::Timer::new_stopped());
     let mut screen_fill_profiler = profiler::Timer::new_stopped();
 
     let mut line_buffer = vec![background; size.width as usize];
@@ -83,7 +82,6 @@ pub fn render_window_frame(
         for span in line.spans.iter().rev() {
             match span.command {
                 SceneCommand::Rectangle => {
-                    span_drawing_sub_profilers[0].start(devices);
                     let color = scene.rectangles[span.data_index];
                     let alpha = color.alpha();
                     if alpha == u8::MAX {
@@ -103,10 +101,8 @@ pub fn render_window_frame(
                             );
                         }
                     }
-                    span_drawing_sub_profilers[0].stop(devices);
                 }
                 SceneCommand::Texture => {
-                    span_drawing_sub_profilers[1].start(devices);
                     let SceneTexture { data, format, stride, source_size, color } =
                         scene.textures[span.data_index];
                     let source_size = source_size.cast::<usize>();
@@ -123,15 +119,10 @@ pub fn render_window_frame(
                         let pos = y_pos + bpp * x * source_size.width / span_size.width;
                         *pix = match format {
                             PixelFormat::Rgb => {
-                                span_drawing_sub_profilers[2].start(devices);
-
-                                let p = Rgb888::new(data[pos + 0], data[pos + 1], data[pos + 2]);
-                                span_drawing_sub_profilers[2].stop(devices);
-                                p
+                                Rgb888::new(data[pos + 0], data[pos + 1], data[pos + 2])
                             }
                             PixelFormat::Rgba => {
-                                span_drawing_sub_profilers[3].start(devices);
-                                let p = if color.alpha() == 0 {
+                                if color.alpha() == 0 {
                                     let a = (u8::MAX - data[pos + 3]) as u16;
                                     let b = data[pos + 3] as u16;
                                     Rgb888::new(
@@ -151,25 +142,19 @@ pub fn render_window_frame(
                                             as u8,
                                         ((pix.b() as u16 * a + color.blue() as u16 * b) >> 8) as u8,
                                     )
-                                };
-                                span_drawing_sub_profilers[3].stop(devices);
-                                p
+                                }
                             }
                             PixelFormat::AlphaMap => {
-                                span_drawing_sub_profilers[4].start(devices);
                                 let a = (u8::MAX - data[pos]) as u16;
                                 let b = data[pos] as u16;
-                                let p = Rgb888::new(
+                                Rgb888::new(
                                     ((pix.r() as u16 * a + color.red() as u16 * b) >> 8) as u8,
                                     ((pix.g() as u16 * a + color.green() as u16 * b) >> 8) as u8,
                                     ((pix.b() as u16 * a + color.blue() as u16 * b) >> 8) as u8,
-                                );
-                                span_drawing_sub_profilers[4].stop(devices);
-                                p
+                                )
                             }
                         }
                     }
-                    span_drawing_sub_profilers[1].stop(devices);
                 }
             }
         }
@@ -181,16 +166,6 @@ pub fn render_window_frame(
 
     line_processing_profiler.stop_profiling(devices, "line processing");
     span_drawing_profiler.stop_profiling(devices, "span drawing");
-    for (p, t) in span_drawing_sub_profilers.into_iter().zip([
-        "    Rectangle",
-        "    Texture",
-        "        RGB",
-        "        RGBA",
-        "        AlphaMap",
-    ]) {
-        p.stop_profiling(devices, t);
-    }
-
     screen_fill_profiler.stop_profiling(devices, "screen fill");
 }
 
