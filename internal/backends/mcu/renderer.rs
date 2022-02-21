@@ -290,7 +290,7 @@ struct SceneTexture {
 fn prepare_scene(
     runtime_window: Rc<i_slint_core::window::Window>,
     size: PhysicalSize,
-    devices: &dyn Devices,
+    devices: &mut dyn Devices,
 ) -> Scene {
     let prepare_scene_profiler = profiler::Timer::new(devices);
     let mut prepare_scene = PrepareScene::new(
