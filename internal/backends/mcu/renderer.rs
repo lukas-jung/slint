@@ -111,21 +111,29 @@ pub fn render_window_frame(
                     let y = (line.line - span.pos.y_length()).cast::<f32>();
                     let y_pos = (y.get() as usize * source_size.height / span_size.height)
                         * stride as usize;
-                    for (x, pix) in line_buffer[span.pos.x as usize
+                    let pix_iter = line_buffer[span.pos.x as usize
                         ..(span.pos.x_length() + span.size.width_length()).get() as usize]
                         .iter_mut()
                         .enumerate()
-                    {
-                        let pos = y_pos + bpp * x * source_size.width / span_size.width;
-                        *pix = match format {
-                            PixelFormat::Rgb => {
-                                Rgb888::new(data[pos + 0], data[pos + 1], data[pos + 2])
+                        /*.map(|(x, pix)| {
+                            (y_pos + bpp * x * source_size.width / span_size.width, pix)
+                        })*/;
+
+                    match format {
+                        PixelFormat::Rgb => {
+                            for (pos, pix) in pix_iter {
+                                let pos = y_pos + bpp * pos * source_size.width / span_size.width;
+                                *pix = Rgb888::new(data[pos + 0], data[pos + 1], data[pos + 2])
                             }
-                            PixelFormat::Rgba => {
-                                if color.alpha() == 0 {
+                        }
+                        PixelFormat::Rgba => {
+                            if color.alpha() == 0 {
+                                for (pos, pix) in pix_iter {
+                                    let pos =
+                                        y_pos + bpp * pos * source_size.width / span_size.width;
                                     let a = (u8::MAX - data[pos + 3]) as u16;
                                     let b = data[pos + 3] as u16;
-                                    Rgb888::new(
+                                    *pix = Rgb888::new(
                                         ((pix.r() as u16 * a + data[pos + 0] as u16 * b) >> 8)
                                             as u8,
                                         ((pix.g() as u16 * a + data[pos + 1] as u16 * b) >> 8)
@@ -133,10 +141,14 @@ pub fn render_window_frame(
                                         ((pix.b() as u16 * a + data[pos + 2] as u16 * b) >> 8)
                                             as u8,
                                     )
-                                } else {
+                                }
+                            } else {
+                                for (pos, pix) in pix_iter {
+                                    let pos =
+                                        y_pos + bpp * pos * source_size.width / span_size.width;
                                     let a = (u8::MAX - data[pos + 3]) as u16;
                                     let b = data[pos + 3] as u16;
-                                    Rgb888::new(
+                                    *pix = Rgb888::new(
                                         ((pix.r() as u16 * a + color.red() as u16 * b) >> 8) as u8,
                                         ((pix.g() as u16 * a + color.green() as u16 * b) >> 8)
                                             as u8,
@@ -144,10 +156,13 @@ pub fn render_window_frame(
                                     )
                                 }
                             }
-                            PixelFormat::AlphaMap => {
+                        }
+                        PixelFormat::AlphaMap => {
+                            for (pos, pix) in pix_iter {
+                                let pos = y_pos + bpp * pos * source_size.width / span_size.width;
                                 let a = (u8::MAX - data[pos]) as u16;
                                 let b = data[pos] as u16;
-                                Rgb888::new(
+                                *pix = Rgb888::new(
                                     ((pix.r() as u16 * a + color.red() as u16 * b) >> 8) as u8,
                                     ((pix.g() as u16 * a + color.green() as u16 * b) >> 8) as u8,
                                     ((pix.b() as u16 * a + color.blue() as u16 * b) >> 8) as u8,
@@ -168,6 +183,29 @@ pub fn render_window_frame(
     span_drawing_profiler.stop_profiling(devices, "span drawing");
     screen_fill_profiler.stop_profiling(devices, "screen fill");
 }
+
+/*
+#[derive(Clone, Copy)]
+struct PremultipliedPixel {
+    // 0x00BB00RR
+    br: u32,
+    // 0x0000GG00
+    g: u32,
+    a: u8,
+}
+impl PremultipliedPixel {
+    fn from_rgba(rgba: [u8; 4]) -> Self {
+        todo!()
+    }
+    fn from_rgb888(pix: Rgb888) -> Self {
+        todo!()
+    }
+    fn blend_onto(self, onto: Rgb888 ) ->Rgb888 {
+        //let onto = PremultipliedPixel::from(Rgb888);
+        onto.b() << 24 + onto.r();
+        let br = self.br + onto.br
+    }
+}*/
 
 struct Scene {
     /// the next line to be processed
