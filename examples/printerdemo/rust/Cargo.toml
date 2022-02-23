@@ -16,7 +16,7 @@ name = "printerdemo"
 
 [features]
 
-mcu-simulator = ["i-slint-backend-mcu/simulator"]
+mcu-simulator = ["i-slint-backend-mcu/simulator", "slint/std"]
 mcu-pico-st7789 = ["i-slint-backend-mcu/pico-st7789", "slint-build/mcu-pico-st7789"]
 
 [dependencies]
