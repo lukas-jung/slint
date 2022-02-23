@@ -80,7 +80,6 @@ resolver="2"
 [profile.release]
 lto = true
 panic = "abort"
-debug = 1
 
 [profile.dev-mcu]
 inherits = "dev"
