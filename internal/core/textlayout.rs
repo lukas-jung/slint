@@ -211,11 +211,8 @@ impl<'a, Font: TextShaper> Iterator for GraphemeCursor<'a, Font> {
         }
         let grapheme_byte_offset = self.current_shapable.start + self.relative_byte_offset;
         let grapheme_byte_len = cluster_index - self.relative_byte_offset;
-        let is_whitespace = self.current_shapable.as_str()[self.relative_byte_offset..]
-            .chars()
-            .next()
-            .map(|ch| ch.is_whitespace())
-            .unwrap_or_default();
+        let first_char = self.current_shapable.as_str()[self.relative_byte_offset..].chars().next();
+        let is_whitespace = first_char.map(|ch| ch.is_whitespace()).unwrap_or_default();
         self.relative_byte_offset = cluster_index;
 
         Some(Grapheme {
@@ -287,7 +284,9 @@ pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
     while let Some(grapheme) = grapheme_cursor.next() {
         match next_break_opportunity.as_ref() {
             Some((offset, unicode_linebreak::BreakOpportunity::Mandatory))
-                if *offset == grapheme.byte_offset =>
+                if *offset == grapheme.byte_offset
+                    || (*offset == grapheme.byte_offset + grapheme.byte_len
+                        && grapheme.is_whitespace) =>
             {
                 next_break_opportunity = line_breaks.next();
 
@@ -297,7 +296,7 @@ pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
             }
             Some((offset, unicode_linebreak::BreakOpportunity::Allowed))
                 if (*offset == grapheme.byte_offset)
-                    | (*offset == grapheme.byte_offset + grapheme.byte_len
+                    || (*offset == grapheme.byte_offset + grapheme.byte_len
                         && grapheme.is_whitespace) =>
             {
                 next_break_opportunity = line_breaks.next();
@@ -480,5 +479,16 @@ mod linebreak_tests {
         break_lines(text, &font, 50., &mut lines);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].line_text(&text), "Hello");
+    }
+
+    #[test]
+    fn test_forced_break() {
+        let font = FixedTestFont;
+        let mut lines: Vec<TextLine> = Vec::new();
+        let text = "Hello\nWorld";
+        break_lines(text, &font, 100., &mut lines);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].line_text(&text), "Hello");
+        assert_eq!(lines[1].line_text(&text), "World");
     }
 }
