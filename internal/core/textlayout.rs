@@ -2,25 +2,41 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
 
 //! module for basic text layout
-
-/// The basic algorithm for breaking text into multiple lines:
-/// (1) First we determine the boundaries for text shaping. These are consecutive sub-strings of text that can be safely shaped. Examples of
-///     boundaries are bidi runs. Shaping boundaries are always also grapheme boundaries.
-/// (2) Then we shape the text at shaping boundaries, to determine the metrics of glyphs and glyph clusters (grapheme boundaries with the shapable)
-/// (3) Allocate graphemes into new text lines until all graphemes are consumed:
-///
-///     Loop over all graphemes:
-///         Compute the width of the grapheme
-///         if end of grapheme is at mandatory line break boundary:
-///            add grapheme width to the current line
-///            current line becomes next emitted line
-///            start new line
-///         if end of grapheme is at line break opportunity:
-///            if width of current line + grapheme width < available line break width:
-///                add grapheme to the current line
-///            else:
-///                current line becomes next emitted line
-///                start new line with current grapheme
+//!
+//! The basic algorithm for breaking text into multiple lines:
+//! 1. First we determine the boundaries for text shaping. These are consecutive sub-strings of text that can be safely shaped. Examples of
+//!    boundaries are bidi runs. Shaping boundaries are always also grapheme boundaries.
+//! 2. Then we shape the text at shaping boundaries, to determine the metrics of glyphs and glyph clusters (grapheme boundaries with the shapable)
+//! 3. Allocate graphemes into new text lines until all graphemes are consumed:
+//!
+//!     Loop over all graphemes:
+//!         Compute the width of the grapheme
+//!         Determine if the grapheme is produced by a white space character
+//!
+//!         If grapheme is not at break opportunity:
+//!             Add grapheme to fragment
+//!             If width of current line + fragment > available width:
+//!                 Emit current line
+//!                 Current line starts with fragment
+//!                 Clear fragment
+//!             Else:
+//!                  Continue
+//!         Else if break opportunity at grapheme boundary is optional OR if current is space and next is optional:
+//!             If width of current line + fragment <= available width:
+//!                  Add fragment to current line
+//!                  Clear fragment
+//!             Else:
+//!                  Emit current line
+//!                  Current line starts with fragment
+//!                  Clear fragment
+//!             Add grapheme to fragment
+//!                 
+//!         Else if break opportunity at grapheme boundary is mandatory:
+//!             Add fragment to current line
+//!             Emit current line
+//!             Clear fragment
+//!             Add grapheme to fragment
+//!
 
 #[derive(Clone, Debug, Default)]
 pub struct ShapedGlyph {
@@ -91,10 +107,12 @@ pub struct TextLine {
     text_width: f32, // with as occupied by the glyphs
 }
 
+#[derive(Clone)]
 struct Grapheme {
     byte_offset: usize,
     byte_len: usize,
     width: f32,
+    is_whitespace: bool,
 }
 
 impl TextLine {
@@ -106,6 +124,9 @@ impl TextLine {
         self.text_width += grapheme.width;
     }
     fn add_line(&mut self, candidate: &mut TextLine) {
+        if self.len == 0 {
+            self.start = candidate.start;
+        }
         self.len += candidate.len;
         self.text_width += candidate.text_width;
         *candidate = Default::default();
@@ -184,13 +205,53 @@ impl<'a, Font: TextShaper> Iterator for GraphemeCursor<'a, Font> {
         }
         let grapheme_byte_offset = self.current_shapable.start + self.relative_byte_offset;
         let grapheme_byte_len = cluster_index - self.relative_byte_offset;
+        let is_whitespace = self.current_shapable.as_str()[self.relative_byte_offset..]
+            .chars()
+            .next()
+            .map(|ch| ch.is_whitespace())
+            .unwrap_or_default();
         self.relative_byte_offset = cluster_index;
 
         Some(Grapheme {
             byte_offset: grapheme_byte_offset,
             byte_len: grapheme_byte_len,
             width: grapheme_width,
+            is_whitespace,
         })
+    }
+}
+
+struct LineBreakHelper<'a, LineStorage: std::iter::Extend<TextLine>> {
+    emitted_lines: &'a mut LineStorage,
+    available_width: f32,
+    current_line: TextLine,
+    fragment: TextLine,
+    trailing_whitespace: TextLine,
+}
+
+impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStorage> {
+    fn commit_current_line(&mut self) {
+        if self.current_line.len > 0 {
+            self.emitted_lines.extend(core::iter::once(std::mem::take(&mut self.current_line)))
+        }
+    }
+    fn commit_fragment(&mut self) {
+        self.current_line.add_line(&mut self.fragment);
+        self.current_line.add_line(&mut self.trailing_whitespace);
+    }
+    fn add_grapheme(&mut self, grapheme: &Grapheme) {
+        if grapheme.is_whitespace {
+            self.trailing_whitespace.add_grapheme(&grapheme)
+        } else {
+            self.fragment.add_line(&mut self.trailing_whitespace);
+            self.fragment.add_grapheme(&grapheme);
+        }
+    }
+    fn fragment_fits(&self) -> bool {
+        self.current_line.text_width
+            + self.fragment.text_width
+            + self.trailing_whitespace.text_width
+            <= self.available_width
     }
 }
 
@@ -200,10 +261,13 @@ pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
     available_width: f32,
     lines: &mut LineStorage,
 ) {
-    // Line that we're constructing
-    let mut current_line = TextLine::default();
-    // Next graphemes
-    let mut candidate_line = TextLine::default();
+    let mut helper = LineBreakHelper {
+        emitted_lines: lines,
+        available_width,
+        current_line: Default::default(),
+        fragment: Default::default(),
+        trailing_whitespace: Default::default(),
+    };
 
     let mut grapheme_cursor = match GraphemeCursor::new(text, font) {
         Some(cursor) => cursor,
@@ -214,46 +278,44 @@ pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
     let mut next_break_opportunity = line_breaks.next();
 
     while let Some(grapheme) = grapheme_cursor.next() {
-        candidate_line.add_grapheme(&grapheme);
-
         match next_break_opportunity.as_ref() {
             Some((offset, unicode_linebreak::BreakOpportunity::Mandatory))
-                if *offset == grapheme.byte_offset + grapheme.byte_len =>
+                if *offset == grapheme.byte_offset =>
             {
                 next_break_opportunity = line_breaks.next();
 
-                lines.extend(core::iter::once(std::mem::replace(
-                    &mut current_line,
-                    core::mem::take(&mut candidate_line),
-                )));
+                helper.commit_fragment();
+                helper.commit_current_line();
+                helper.add_grapheme(&grapheme);
             }
             Some((offset, unicode_linebreak::BreakOpportunity::Allowed))
-                if *offset == grapheme.byte_offset + grapheme.byte_len =>
+                if (*offset == grapheme.byte_offset)
+                    | (*offset == grapheme.byte_offset + grapheme.byte_len
+                        && grapheme.is_whitespace) =>
             {
                 next_break_opportunity = line_breaks.next();
 
-                if current_line.text_width + candidate_line.text_width < available_width {
-                    candidate_line.add_grapheme(&grapheme);
-                    current_line.add_line(&mut candidate_line);
+                if helper.fragment_fits() {
+                    helper.commit_fragment();
                 } else {
-                    lines.extend(core::iter::once(std::mem::replace(
-                        &mut current_line,
-                        core::mem::take(&mut candidate_line),
-                    )));
-                    candidate_line.add_grapheme(&grapheme);
+                    helper.commit_current_line();
+                    helper.commit_fragment();
                 }
+
+                helper.add_grapheme(&grapheme);
             }
             _ => {
-                candidate_line.add_grapheme(&grapheme);
+                helper.add_grapheme(&grapheme);
+
+                if !helper.fragment_fits() {
+                    helper.commit_current_line();
+                    helper.commit_fragment();
+                }
             }
         };
     }
-    if candidate_line.len > 0 {
-        current_line.add_line(&mut candidate_line);
-    }
-    if current_line.len > 0 {
-        lines.extend(core::iter::once(current_line));
-    }
+    helper.commit_fragment();
+    helper.commit_current_line();
 }
 
 #[test]
@@ -375,7 +437,7 @@ mod linebreak_tests {
             text: &str,
             glyphs: &mut GlyphStorage,
         ) {
-            for (byte_offset, ch) in text.char_indices() {
+            for (byte_offset, _) in text.char_indices() {
                 let out_glyph = ShapedGlyph {
                     offset_x: 0.,
                     offset_y: 0.,
@@ -396,7 +458,7 @@ mod linebreak_tests {
     fn test_basic_line_break() {
         let font = FixedTestFont;
         let mut lines: Vec<TextLine> = Vec::new();
-        break_lines("H W", &font, 10., &mut lines);
+        break_lines("Hello World", &font, 50., &mut lines);
         eprintln!("{:#?}", lines);
     }
 }
