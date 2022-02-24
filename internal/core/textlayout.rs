@@ -204,7 +204,7 @@ impl<'a, Font: TextShaper> Iterator for GraphemeCursor<'a, Font> {
 
             self.glyph_index += 1;
 
-            if self.glyph_index >= self.current_shapable.len {
+            if self.glyph_index >= self.glyphs.len() {
                 cluster_index = self.current_shapable.len;
                 break;
             }
@@ -249,6 +249,7 @@ impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStora
             }
         } else {
             self.fragment.add_grapheme(&grapheme);
+            self.trailing_whitespace = Default::default();
         }
     }
     fn fragment_fits(&self) -> bool {
@@ -490,5 +491,15 @@ mod linebreak_tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].line_text(&text), "Hello");
         assert_eq!(lines[1].line_text(&text), "World");
+    }
+
+    #[test]
+    fn test_nbsp_break() {
+        let font = FixedTestFont;
+        let mut lines: Vec<TextLine> = Vec::new();
+        let text = "Hello\u{00a0}World";
+        break_lines(text, &font, 100., &mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line_text(&text), "Hello\u{00a0}Wor"); // FIXME: let line overflow
     }
 }
