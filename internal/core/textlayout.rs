@@ -107,6 +107,12 @@ pub struct TextLine {
     text_width: f32, // with as occupied by the glyphs
 }
 
+impl TextLine {
+    fn line_text<'a>(&self, paragraph: &'a str) -> &'a str {
+        &paragraph[self.start..self.start + self.len]
+    }
+}
+
 #[derive(Clone)]
 struct Grapheme {
     byte_offset: usize,
@@ -241,9 +247,10 @@ impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStora
     }
     fn add_grapheme(&mut self, grapheme: &Grapheme) {
         if grapheme.is_whitespace {
-            self.trailing_whitespace.add_grapheme(&grapheme)
+            if self.fragment.len > 0 {
+                self.trailing_whitespace.add_grapheme(&grapheme)
+            }
         } else {
-            self.fragment.add_line(&mut self.trailing_whitespace);
             self.fragment.add_grapheme(&grapheme);
         }
     }
@@ -458,7 +465,20 @@ mod linebreak_tests {
     fn test_basic_line_break() {
         let font = FixedTestFont;
         let mut lines: Vec<TextLine> = Vec::new();
-        break_lines("Hello World", &font, 50., &mut lines);
-        eprintln!("{:#?}", lines);
+        let text = "Hello World";
+        break_lines(text, &font, 50., &mut lines);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].line_text(&text), "Hello");
+        assert_eq!(lines[1].line_text(&text), "World");
+    }
+
+    #[test]
+    fn test_linebreak_trailing_space() {
+        let font = FixedTestFont;
+        let mut lines: Vec<TextLine> = Vec::new();
+        let text = "Hello              ";
+        break_lines(text, &font, 50., &mut lines);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line_text(&text), "Hello");
     }
 }
