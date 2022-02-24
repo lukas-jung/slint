@@ -337,8 +337,8 @@ mod shape_tests {
                 assert_eq!(shaped_glyphs[0].glyph_id, NonZeroU16::new(195));
                 assert_eq!(shaped_glyphs[0].glyph_cluster_index, 0);
 
-                assert_eq!(shaped_glyphs[0].glyph_id, NonZeroU16::new(195));
-                assert_eq!(shaped_glyphs[0].glyph_cluster_index, 0);
+                assert_eq!(shaped_glyphs[1].glyph_id, NonZeroU16::new(690));
+                assert_eq!(shaped_glyphs[1].glyph_cluster_index, 0);
 
                 assert_eq!(shaped_glyphs[2].glyph_id, NonZeroU16::new(69));
                 assert_eq!(shaped_glyphs[2].glyph_cluster_index, 5);
@@ -353,7 +353,7 @@ mod shape_tests {
                 assert_eq!(shaped_glyphs[0].glyph_id, NonZeroU16::new(68));
                 assert_eq!(shaped_glyphs[0].glyph_cluster_index, 0);
 
-                assert_eq!(shaped_glyphs[0].glyph_cluster_index, 1);
+                assert_eq!(shaped_glyphs[1].glyph_cluster_index, 1);
 
                 assert_eq!(shaped_glyphs[2].glyph_id, NonZeroU16::new(69));
                 assert_eq!(shaped_glyphs[2].glyph_cluster_index, 2);
