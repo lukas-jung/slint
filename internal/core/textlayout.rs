@@ -234,9 +234,7 @@ struct LineBreakHelper<'a, LineStorage: std::iter::Extend<TextLine>> {
 
 impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStorage> {
     fn commit_current_line(&mut self) {
-        if self.current_line.len > 0 {
-            self.emitted_lines.extend(core::iter::once(std::mem::take(&mut self.current_line)))
-        }
+        self.emitted_lines.extend(core::iter::once(std::mem::take(&mut self.current_line)))
     }
     fn commit_fragment(&mut self) {
         self.current_line.add_line(&mut self.fragment);
@@ -322,7 +320,9 @@ pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
         };
     }
     helper.commit_fragment();
-    helper.commit_current_line();
+    if helper.current_line.len > 0 {
+        helper.commit_current_line();
+    }
 }
 
 #[test]
@@ -491,6 +491,19 @@ mod linebreak_tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].line_text(&text), "Hello");
         assert_eq!(lines[1].line_text(&text), "World");
+    }
+
+    #[test]
+    fn test_forced_break_multi() {
+        let font = FixedTestFont;
+        let mut lines: Vec<TextLine> = Vec::new();
+        let text = "Hello\n\n\nWorld";
+        break_lines(text, &font, 100., &mut lines);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].line_text(&text), "Hello");
+        assert_eq!(lines[1].line_text(&text), "");
+        assert_eq!(lines[2].line_text(&text), "");
+        assert_eq!(lines[3].line_text(&text), "World");
     }
 
     #[test]
