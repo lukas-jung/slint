@@ -24,9 +24,10 @@ pub fn render_window_frame(
     runtime_window: Rc<i_slint_core::window::Window>,
     background: Rgb888,
     devices: &mut dyn Devices,
+    cache: &mut i_slint_core::item_rendering::PartialRenderingCache,
 ) {
     let size = devices.screen_size();
-    let mut scene = prepare_scene(runtime_window, size, devices);
+    let mut scene = prepare_scene(runtime_window, size, devices, cache);
 
     /*for item in scene.future_items {
         match item.command {
@@ -189,7 +190,24 @@ struct Scene {
 }
 
 impl Scene {
-    fn new(mut items: Vec<SceneItem>, rectangles: Vec<Color>, textures: Vec<SceneTexture>) -> Self {
+    fn new(
+        mut items: Vec<SceneItem>,
+        mut rectangles: Vec<Color>,
+        textures: Vec<SceneTexture>,
+        dirty_regions_debug: Vec<PhysicalRect>,
+    ) -> Self {
+        let data_index = rectangles.len();
+        rectangles.push(Color::from_argb_u8(128, 255, 0, 0));
+        let z = items.len() as u16;
+        for r in dirty_regions_debug.into_iter() {
+            items.push(SceneItem {
+                pos: r.origin,
+                size: r.size,
+                z,
+                command: SceneCommand::Rectangle,
+                data_index,
+            })
+        }
         items.sort_unstable_by(|a, b| compare_scene_item(a, b).reverse());
         Self {
             future_items: items,
@@ -291,24 +309,33 @@ fn prepare_scene(
     runtime_window: Rc<i_slint_core::window::Window>,
     size: PhysicalSize,
     devices: &mut dyn Devices,
+    cache: &mut i_slint_core::item_rendering::PartialRenderingCache,
 ) -> Scene {
     let prepare_scene_profiler = profiler::Timer::new(devices);
-    let mut prepare_scene = PrepareScene::new(
-        size,
-        ScaleFactor::new(runtime_window.scale_factor()),
-        runtime_window.default_font_properties(),
-    );
+    let factor = ScaleFactor::new(runtime_window.scale_factor());
+    let prepare_scene = PrepareScene::new(size, factor, runtime_window.default_font_properties());
+    let mut renderer = i_slint_core::item_rendering::PartialRenderer::new(cache, prepare_scene);
+
+    let mut dirty_region_debug = vec![];
+
     runtime_window.draw_contents(|components| {
         for (component, origin) in components {
-            i_slint_core::item_rendering::render_component_items(
-                component,
-                &mut prepare_scene,
-                origin.clone(),
-            );
+            renderer.compute_dirty_regions(component, *origin);
+            dirty_region_debug.append(&mut renderer.dirty_region_debug);
+            i_slint_core::item_rendering::render_component_items(component, &mut renderer, *origin);
         }
     });
     prepare_scene_profiler.stop_profiling(devices, "prepare_scene");
-    Scene::new(prepare_scene.items, prepare_scene.rectangles, prepare_scene.textures)
+    let prepare_scene = renderer.into_inner();
+    Scene::new(
+        prepare_scene.items,
+        prepare_scene.rectangles,
+        prepare_scene.textures,
+        dirty_region_debug
+            .into_iter()
+            .map(|r| (euclid::Rect::from_untyped(&r) * factor).round_out().cast())
+            .collect(),
+    )
 }
 
 struct PrepareScene {
