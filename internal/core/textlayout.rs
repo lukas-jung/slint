@@ -8,34 +8,32 @@
 //!    boundaries are bidi runs. Shaping boundaries are always also grapheme boundaries.
 //! 2. Then we shape the text at shaping boundaries, to determine the metrics of glyphs and glyph clusters (grapheme boundaries with the shapable)
 //! 3. Allocate graphemes into new text lines until all graphemes are consumed:
-//!
-//!     Loop over all graphemes:
-//!         Compute the width of the grapheme
-//!         Determine if the grapheme is produced by a white space character
-//!
-//!         If grapheme is not at break opportunity:
-//!             Add grapheme to fragment
-//!             If width of current line + fragment > available width:
-//!                 Emit current line
-//!                 Current line starts with fragment
-//!                 Clear fragment
-//!             Else:
-//!                  Continue
-//!         Else if break opportunity at grapheme boundary is optional OR if current is space and next is optional:
-//!             If width of current line + fragment <= available width:
-//!                  Add fragment to current line
-//!                  Clear fragment
-//!             Else:
-//!                  Emit current line
-//!                  Current line starts with fragment
-//!                  Clear fragment
-//!             Add grapheme to fragment
-//!                 
-//!         Else if break opportunity at grapheme boundary is mandatory:
-//!             Add fragment to current line
+//! 4. Loop over all graphemes:
+//!     Compute the width of the grapheme
+//!     Determine if the grapheme is produced by a white space character
+//!     If grapheme is not at break opportunity:
+//!         Add grapheme to fragment
+//!         If width of current line + fragment > available width:
 //!             Emit current line
+//!             Current line starts with fragment
 //!             Clear fragment
-//!             Add grapheme to fragment
+//!         Else:
+//!              Continue
+//!     Else if break opportunity at grapheme boundary is optional OR if current is space and next is optional:
+//!         If width of current line + fragment <= available width:
+//!              Add fragment to current line
+//!              Clear fragment
+//!         Else:
+//!              Emit current line
+//!              Current line starts with fragment
+//!              Clear fragment
+//!         Add grapheme to fragment
+//!             
+//!     Else if break opportunity at grapheme boundary is mandatory:
+//!         Add fragment to current line
+//!         Emit current line
+//!         Clear fragment
+//!         Add grapheme to fragment
 //!
 
 #[derive(Clone, Debug, Default)]
@@ -150,29 +148,23 @@ struct GraphemeCursor<'a, Font: TextShaper> {
 }
 
 impl<'a, Font: TextShaper> GraphemeCursor<'a, Font> {
-    fn new(text: &'a str, font: &'a Font) -> Option<Self> {
+    fn new(text: &'a str, font: &'a Font) -> Self {
         let mut shape_boundaries = ShapeBoundaries::new(text);
 
-        let current_shapable = match shape_boundaries.next() {
-            Some(shapable) => shapable,
-            None => return None,
-        };
+        let current_shapable =
+            shape_boundaries.next().unwrap_or(ShapableText { text, start: 0, len: 0 });
 
         let mut glyphs = Vec::new();
         font.shape_text(current_shapable.as_str(), &mut glyphs);
 
-        if glyphs.len() == 0 {
-            return None;
-        }
-
-        Some(Self {
+        Self {
             font,
             shape_boundaries,
             current_shapable,
             glyphs,
             relative_byte_offset: 0,
             glyph_index: 0,
-        })
+        }
     }
 }
 
@@ -224,18 +216,17 @@ impl<'a, Font: TextShaper> Iterator for GraphemeCursor<'a, Font> {
     }
 }
 
-struct LineBreakHelper<'a, LineStorage: std::iter::Extend<TextLine>> {
-    emitted_lines: &'a mut LineStorage,
+struct TextLineBreaker<'a, Font: TextShaper> {
+    line_breaks: Box<dyn Iterator<Item = (usize, unicode_linebreak::BreakOpportunity)> + 'a>, // Would be nice to get rid of that Box...
+    next_break_opportunity: Option<(usize, unicode_linebreak::BreakOpportunity)>,
+    grapheme_cursor: GraphemeCursor<'a, Font>,
     available_width: f32,
     current_line: TextLine,
     fragment: TextLine,
     trailing_whitespace: TextLine,
 }
 
-impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStorage> {
-    fn commit_current_line(&mut self) {
-        self.emitted_lines.extend(core::iter::once(std::mem::take(&mut self.current_line)))
-    }
+impl<'a, Font: TextShaper> TextLineBreaker<'a, Font> {
     fn commit_fragment(&mut self) {
         self.current_line.add_line(&mut self.fragment);
         self.current_line.add_line(&mut self.trailing_whitespace);
@@ -256,72 +247,80 @@ impl<'a, LineStorage: std::iter::Extend<TextLine>> LineBreakHelper<'a, LineStora
             + self.trailing_whitespace.text_width
             <= self.available_width
     }
+
+    pub fn new(text: &'a str, font: &'a Font, available_width: f32) -> Self {
+        let mut line_breaks = unicode_linebreak::linebreaks(text);
+        let next_break_opportunity = line_breaks.next();
+
+        let grapheme_cursor = GraphemeCursor::new(text, font);
+
+        Self {
+            line_breaks: Box::new(line_breaks),
+            next_break_opportunity,
+            grapheme_cursor,
+            available_width,
+            current_line: Default::default(),
+            fragment: Default::default(),
+            trailing_whitespace: Default::default(),
+        }
+    }
 }
 
-pub fn break_lines<Font: TextShaper, LineStorage: std::iter::Extend<TextLine>>(
-    text: &str,
-    font: &Font,
-    available_width: f32,
-    lines: &mut LineStorage,
-) {
-    let mut helper = LineBreakHelper {
-        emitted_lines: lines,
-        available_width,
-        current_line: Default::default(),
-        fragment: Default::default(),
-        trailing_whitespace: Default::default(),
-    };
+impl<'a, Font: TextShaper> Iterator for TextLineBreaker<'a, Font> {
+    type Item = TextLine;
 
-    let mut grapheme_cursor = match GraphemeCursor::new(text, font) {
-        Some(cursor) => cursor,
-        None => return,
-    };
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(grapheme) = self.grapheme_cursor.next() {
+            let mut line_to_emit = None;
 
-    let mut line_breaks = unicode_linebreak::linebreaks(text);
-    let mut next_break_opportunity = line_breaks.next();
+            match self.next_break_opportunity.as_ref() {
+                Some((offset, unicode_linebreak::BreakOpportunity::Mandatory))
+                    if *offset == grapheme.byte_offset
+                        || (*offset == grapheme.byte_offset + grapheme.byte_len
+                            && grapheme.is_whitespace) =>
+                {
+                    self.next_break_opportunity = self.line_breaks.next();
 
-    while let Some(grapheme) = grapheme_cursor.next() {
-        match next_break_opportunity.as_ref() {
-            Some((offset, unicode_linebreak::BreakOpportunity::Mandatory))
-                if *offset == grapheme.byte_offset
-                    || (*offset == grapheme.byte_offset + grapheme.byte_len
-                        && grapheme.is_whitespace) =>
-            {
-                next_break_opportunity = line_breaks.next();
-
-                helper.commit_fragment();
-                helper.commit_current_line();
-                helper.add_grapheme(&grapheme);
-            }
-            Some((offset, unicode_linebreak::BreakOpportunity::Allowed))
-                if (*offset == grapheme.byte_offset)
-                    || (*offset == grapheme.byte_offset + grapheme.byte_len
-                        && grapheme.is_whitespace) =>
-            {
-                next_break_opportunity = line_breaks.next();
-
-                if helper.fragment_fits() {
-                    helper.commit_fragment();
-                } else {
-                    helper.commit_current_line();
-                    helper.commit_fragment();
+                    self.commit_fragment();
+                    line_to_emit = Some(core::mem::take(&mut self.current_line));
+                    self.add_grapheme(&grapheme);
                 }
+                Some((offset, unicode_linebreak::BreakOpportunity::Allowed))
+                    if (*offset == grapheme.byte_offset)
+                        || (*offset == grapheme.byte_offset + grapheme.byte_len
+                            && grapheme.is_whitespace) =>
+                {
+                    self.next_break_opportunity = self.line_breaks.next();
 
-                helper.add_grapheme(&grapheme);
-            }
-            _ => {
-                helper.add_grapheme(&grapheme);
+                    if self.fragment_fits() {
+                        self.commit_fragment();
+                    } else {
+                        line_to_emit = Some(core::mem::take(&mut self.current_line));
+                        self.commit_fragment();
+                    }
 
-                if !helper.fragment_fits() {
-                    helper.commit_current_line();
-                    helper.commit_fragment();
+                    self.add_grapheme(&grapheme);
                 }
+                _ => {
+                    self.add_grapheme(&grapheme);
+
+                    if !self.fragment_fits() {
+                        line_to_emit = Some(core::mem::take(&mut self.current_line));
+                        self.commit_fragment();
+                    }
+                }
+            };
+
+            if line_to_emit.is_some() {
+                return line_to_emit;
             }
-        };
-    }
-    helper.commit_fragment();
-    if helper.current_line.len > 0 {
-        helper.commit_current_line();
+        }
+        self.commit_fragment();
+        if self.current_line.len > 0 {
+            return Some(core::mem::take(&mut self.current_line));
+        }
+
+        None
     }
 }
 
@@ -461,12 +460,22 @@ mod linebreak_tests {
         }
     }
 
+    /*
+    #[test]
+    fn test_empty_line_break() {
+        let font = FixedTestFont;
+        let text = "";
+        let lines = TextLineBreaker::new(text, &font, 50.).collect::<Vec<_>>();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line_text(&text), "");
+    }
+    */
+
     #[test]
     fn test_basic_line_break() {
         let font = FixedTestFont;
-        let mut lines: Vec<TextLine> = Vec::new();
         let text = "Hello World";
-        break_lines(text, &font, 50., &mut lines);
+        let lines = TextLineBreaker::new(text, &font, 50.).collect::<Vec<_>>();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].line_text(&text), "Hello");
         assert_eq!(lines[1].line_text(&text), "World");
@@ -475,9 +484,8 @@ mod linebreak_tests {
     #[test]
     fn test_linebreak_trailing_space() {
         let font = FixedTestFont;
-        let mut lines: Vec<TextLine> = Vec::new();
         let text = "Hello              ";
-        break_lines(text, &font, 50., &mut lines);
+        let lines = TextLineBreaker::new(text, &font, 50.).collect::<Vec<_>>();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].line_text(&text), "Hello");
     }
@@ -485,9 +493,8 @@ mod linebreak_tests {
     #[test]
     fn test_forced_break() {
         let font = FixedTestFont;
-        let mut lines: Vec<TextLine> = Vec::new();
         let text = "Hello\nWorld";
-        break_lines(text, &font, 100., &mut lines);
+        let lines = TextLineBreaker::new(text, &font, 100.).collect::<Vec<_>>();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].line_text(&text), "Hello");
         assert_eq!(lines[1].line_text(&text), "World");
@@ -496,9 +503,8 @@ mod linebreak_tests {
     #[test]
     fn test_forced_break_multi() {
         let font = FixedTestFont;
-        let mut lines: Vec<TextLine> = Vec::new();
         let text = "Hello\n\n\nWorld";
-        break_lines(text, &font, 100., &mut lines);
+        let lines = TextLineBreaker::new(text, &font, 100.).collect::<Vec<_>>();
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].line_text(&text), "Hello");
         assert_eq!(lines[1].line_text(&text), "");
@@ -509,9 +515,8 @@ mod linebreak_tests {
     #[test]
     fn test_nbsp_break() {
         let font = FixedTestFont;
-        let mut lines: Vec<TextLine> = Vec::new();
         let text = "Hello\u{00a0}World";
-        break_lines(text, &font, 100., &mut lines);
+        let lines = TextLineBreaker::new(text, &font, 100.).collect::<Vec<_>>();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].line_text(&text), "Hello\u{00a0}Wor"); // FIXME: let line overflow
     }
