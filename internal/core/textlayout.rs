@@ -57,23 +57,6 @@ pub trait TextShaper {
     );
 }
 
-pub struct ShapeBoundaries<'a> {
-    text: &'a str,
-    // TODO: We should do a better analysis to find boundaries for text shaping; including
-    // boundaries when the bidi level changes, the script changes or an explicit separator like
-    // paragraph/lineseparator/space is encountered.
-    word_iterator: unicode_segmentation::UnicodeWordIndices<'a>,
-    last_offset: usize,
-}
-
-impl<'a> ShapeBoundaries<'a> {
-    pub fn new(text: &'a str) -> Self {
-        use unicode_segmentation::UnicodeSegmentation;
-        let word_iterator = text.unicode_word_indices();
-        Self { text, word_iterator, last_offset: 0 }
-    }
-}
-
 #[derive(PartialEq, Eq, Debug)]
 pub struct ShapableText<'a> {
     text: &'a str,
@@ -87,14 +70,54 @@ impl<'a> ShapableText<'a> {
     }
 }
 
+pub struct ShapeBoundaries<'a> {
+    text: &'a str,
+    // TODO: We should do a better analysis to find boundaries for text shaping; including
+    // boundaries when the bidi level changes, the script changes or an explicit separator like
+    // paragraph/lineseparator/space is encountered.
+    chars: core::str::CharIndices<'a>,
+    next_boundary_start: Option<usize>,
+    last_script: Option<unicode_script::Script>,
+}
+
+impl<'a> ShapeBoundaries<'a> {
+    pub fn new(text: &'a str) -> Self {
+        let chars = text.char_indices();
+        Self { text, chars, next_boundary_start: Some(0), last_script: None }
+    }
+}
+
 impl<'a> Iterator for ShapeBoundaries<'a> {
     type Item = ShapableText<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.word_iterator.next().map(|(offset, str)| {
-            let start = core::mem::replace(&mut self.last_offset, offset + str.len());
-            ShapableText { text: self.text, start, len: offset + str.len() - start }
-        })
+        let start = self.next_boundary_start?;
+
+        use unicode_script::UnicodeScript;
+        let (next_offset, script) = loop {
+            match self.chars.next() {
+                Some((byte_offset, ch)) => {
+                    let script = ch.script();
+                    if script != *self.last_script.get_or_insert(script) {
+                        break (Some(byte_offset), Some(script));
+                    }
+                }
+                None => {
+                    break (None, None);
+                }
+            }
+        };
+
+        let item = ShapableText {
+            text: self.text,
+            start,
+            len: next_offset.unwrap_or_else(|| self.text.len()) - start,
+        };
+
+        self.last_script = script;
+        self.next_boundary_start = next_offset;
+
+        Some(item)
     }
 }
 
@@ -325,12 +348,31 @@ impl<'a, Font: TextShaper> Iterator for TextLineBreaker<'a, Font> {
 }
 
 #[test]
-fn test_shape_boundaries() {
+fn test_shape_boundaries_simple() {
     {
         let simple_text = "Hello World";
         let mut itemizer = ShapeBoundaries::new(simple_text);
-        assert_eq!(itemizer.next().map(|s| s.as_str()), Some("Hello"));
-        assert_eq!(itemizer.next().map(|s| s.as_str()), Some(" World"));
+        assert_eq!(itemizer.next().map(|s| s.as_str()), Some("Hello World"));
+        assert_eq!(itemizer.next(), None);
+    }
+}
+
+#[test]
+fn test_shape_boundaries_empty() {
+    {
+        let mut itemizer = ShapeBoundaries::new("");
+        assert_eq!(itemizer.next().map(|s| s.as_str()), Some(""));
+        assert_eq!(itemizer.next(), None);
+    }
+}
+
+#[test]
+fn test_shape_boundaries_script_change() {
+    {
+        let mut itemizer = ShapeBoundaries::new("abc🍌🐒def");
+        assert_eq!(itemizer.next().map(|s| s.as_str()), Some("abc"));
+        assert_eq!(itemizer.next().map(|s| s.as_str()), Some("🍌🐒"));
+        assert_eq!(itemizer.next().map(|s| s.as_str()), Some("def"));
         assert_eq!(itemizer.next(), None);
     }
 }

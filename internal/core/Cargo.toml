@@ -28,7 +28,7 @@ std = ["euclid/std", "once_cell/std", "scoped-tls-hkt", "lyon_path", "lyon_algor
 # from a single core, and not in a interrupt or signal handler.
 unsafe_single_core = []
 
-text_layout = ["unicode-linebreak"]
+text_layout = ["unicode-linebreak", "unicode-script"]
 
 default = ["std", "text_layout"]
 
@@ -63,6 +63,7 @@ static_assertions = "1.1"
 strum = { version = "0.23.0", default-features = false, features = ["derive"] }
 unicode-segmentation = "1.8.0"
 unicode-linebreak = { version = "0.1.2", optional = true }
+unicode-script = { version = "0.5.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 instant = { version = "0.1", features = [ "wasm-bindgen", "now" ] }
