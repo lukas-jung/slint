@@ -4,8 +4,10 @@
 //! module for basic text layout
 //!
 //! The basic algorithm for breaking text into multiple lines:
-//! 1. First we determine the boundaries for text shaping. These are consecutive sub-strings of text that can be safely shaped. Examples of
-//!    boundaries are bidi runs. Shaping boundaries are always also grapheme boundaries.
+//! 1. First we determine the boundaries for text shaping. As shaping happens based on a single font and we know that different fonts cater different
+//!    writing systems, we split up the text into chunks that maximize our chances of finding a font that covers all glyphs in the chunk. This way for
+//!    example arabic text can be covered by a font that has excellent arabic coverage while latin text is rendered using a different font.
+//!    Shaping boundaries are always also grapheme boundaries.
 //! 2. Then we shape the text at shaping boundaries, to determine the metrics of glyphs and glyph clusters (grapheme boundaries with the shapable)
 //! 3. Allocate graphemes into new text lines until all graphemes are consumed:
 //! 4. Loop over all graphemes:
@@ -83,7 +85,8 @@ pub struct ShapeBoundaries<'a> {
 impl<'a> ShapeBoundaries<'a> {
     pub fn new(text: &'a str) -> Self {
         let chars = text.char_indices();
-        Self { text, chars, next_boundary_start: Some(0), last_script: None }
+        let next_boundary_start = if text.len() > 0 { Some(0) } else { None };
+        Self { text, chars, next_boundary_start, last_script: None }
     }
 }
 
@@ -361,7 +364,6 @@ fn test_shape_boundaries_simple() {
 fn test_shape_boundaries_empty() {
     {
         let mut itemizer = ShapeBoundaries::new("");
-        assert_eq!(itemizer.next().map(|s| s.as_str()), Some(""));
         assert_eq!(itemizer.next(), None);
     }
 }
